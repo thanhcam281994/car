@@ -1,0 +1,8 @@
+<p>
+    &bull; Vui lòng nhập đúng email. Chúng tôi sẽ gửi quà qua email cho bạn!
+</p>
+<div class="form-group">
+    <label>Email</label>
+    <input type="text" id="input-email" placeholder="Nhập vào email của bạn" class="form-control">
+</div>
+<p class="text-danger" style="display:none"></p>

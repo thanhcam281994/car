@@ -1,0 +1,271 @@
+<?php
+/**
+ * Plugin: JW Player for WordPress
+ *
+ * @link http://wordpress.org/plugins/jw-player-plugin-for-wordpress/
+ * @since 1.0
+ */ 
+
+if(class_exists('JWP6_Plugin')) {
+	if (JWP6_USE_CUSTOM_SHORTCODE_FILTER)
+		add_filter('tm_video_filter', array('JWP6_Shortcode', 'widget_text_filter'));
+}
+	
+if(function_exists('jwplayer_tag_callback')) {
+	add_filter('tm_video_filter', 'jwplayer_tag_callback');
+}
+/**
+ * Determines if the specified post is a video post.
+*/
+require_once locate_template('/library/core/classes/class.video-fetcher.php');
+
+function tm_player($player = '', $args = array()) {
+	if(empty($player) || empty($args['files']))
+		return;
+	
+	$defaults = array(
+		'files' => array(),
+		'poster' => '',
+		'autoplay' => false
+	);
+	$args = wp_parse_args($args, $defaults);
+	
+	extract($args);
+	
+		
+	/* JWPlayer */
+	if($player == 'jwplayer') {
+		$options = array(
+			'file' => trim($files[0]), // JWPlayer WordPress Plugin doesn't support multiple codecs
+			'image' => $poster
+		);
+		$atts = arr2atts($options);
+		$jwplayer_shortcode = '[jwplayer'.$atts.']';
+		echo apply_filters('tm_video_filter', $jwplayer_shortcode);
+	}	
+	/* FlowPlayer */
+	elseif($player == 'flowplayer' && function_exists('flowplayer_content_handle')) {
+		$atts = array(
+			'splash' => $poster
+		);
+		foreach($files as $key => $file) {
+			$att = ($key == 0) ? 'src' : 'src'.$key;
+			$atts[$att] = $file;
+		}
+		echo flowplayer_content_handle($atts, '', '');
+		tm_flowplayer_script();
+	}	
+	elseif($player == 'videojs' && function_exists('video_shortcode')){
+		$atts = array(
+			'poster' => $poster,
+		);
+		foreach($files as $key => $file) {
+			$att = ($key == 0) ? 'src' : 'src'.$key;
+			if(strpos($file, '.mp4') !== false){$atts['mp4'] = $file;}
+			if(strpos($file, '.webm') !== false){$atts['webm'] = $file;}
+			if(strpos($file, '.ogg') !== false){$atts['ogg'] = $file;}
+		}
+		echo video_shortcode($atts, '', '');
+		tm_add_videojs_swf();
+	}
+	/* WordPress Native Player: MediaElement */
+	else{
+		$atts = array();
+		foreach($files as $file) {
+			$file = trim($file);
+			
+			if(strpos($file, 'youtube.com') !== false)
+				$atts['youtube'] = $file;
+			else {
+				$type = wp_check_filetype($file, wp_get_mime_types());
+				$atts[$type['ext']] = $file;
+			}
+		}
+			
+		echo wp_video_shortcode($atts);
+	} 
+}
+/**
+ */
+function tm_extend_video_html($html, $autoplay = false, $wmode = 'opaque') {
+	$replace = false;
+	$color_bt = 'f9c73d';
+	preg_match('/src=[\"|\']([^ ]*)[\"|\']/', $html, $matches);
+	$color_bt = str_replace('#','',$color_bt);
+
+	if(isset($matches[1])) {
+		$url = $matches[1];
+		
+		// Vimeo
+		if(strpos($url, 'vimeo.com')) {
+			// Remove the title, byline, portrait on Vimeo video
+			$url = add_query_arg(array('title'=>0,'byline'=>0,'portrait'=>0,'player_id'=>'player_1','color'=>$color_bt), $url);
+			//
+			// Set autoplay
+			if($autoplay)
+				$url = add_query_arg('autoplay', '1', $url);
+			$replace = true;
+		}
+			
+		// Youtube
+		if(strpos($url, 'youtube.com')) {
+			// Set autoplay
+			if($autoplay)
+				$url = add_query_arg('autoplay', '1', $url);
+		
+			// Add wmode
+			if($wmode)
+				$url = add_query_arg('wmode', $wmode, $url);
+			
+			// Disabled suggested videos on YouTube video when the video finishes
+			$url = add_query_arg(array('rel'=>0), $url);
+			// Remove top info bar
+			$url = add_query_arg(array('showinfo'=>0), $url);
+			// $remove_annotations = ot_get_option('remove_annotations');
+			// if($remove_annotations!= '1'){
+				$url = add_query_arg(array('iv_load_policy'=>3), $url);
+			// }
+			// Remove YouTube Logo
+			$url = add_query_arg(array('modestbranding'=>0), $url);
+			// Remove YouTube video annotations
+			// $url = add_query_arg('iv_load_policy', 3, $url);
+			
+			$replace = true;
+		}		
+		if($replace) {
+			$url = esc_attr($url);	
+			$html = preg_replace('/src=[\"|\']([^ ]*)[\"|\']/', 'src="'.$url.'"', $html);
+		}
+	}
+	
+	return $html;
+}
+
+
+
+function tm_video($post_id,$file,$url,$code, $autoplay = false) {
+	global $theme_options;
+	// $file = get_post_meta($post_id, $file_meta, true);	
+	$files = !empty($file) ? explode("\n", $file) : array();
+	// $url = trim(get_post_meta($post_id, $url_meta, true));
+	// $code = trim(get_post_meta($post_id, $code_meta, true));	
+
+	// Define RELATIVE_PATH for Flowplayer in Ajax Call
+	//if (!defined('RELATIVE_PATH') && defined('DOING_AJAX') && DOING_AJAX)
+		//define('RELATIVE_PATH', plugins_url().'/fv-wordpress-flowplayer');
+	
+	if(!empty($file)){
+		if(has_post_thumbnail($post_id) && $thumb = wp_get_attachment_image_src(get_post_thumbnail_id($post_id), 'custom-large')){
+			$poster = $thumb[0];}
+		$player = $theme_options['single_player_video'];
+		if($player =='' && class_exists('JWP6_Plugin')){
+			$player ='jwplayer';}
+		else if($player ==''){
+			$player = 'mediaelement';
+		}
+		$args = array(
+			'files' => $files,
+			// 'poster' => $poster,
+			'autoplay' => $autoplay
+		);
+		tm_player($player, $args);
+	}elseif(!empty($code)) {
+		$video = do_shortcode($code);
+		
+		$video = apply_filters('tm_video_filter', $video);
+		
+		$video = tm_extend_video_html($video, $autoplay);
+		
+		if(has_shortcode($code, 'fvplayer') || has_shortcode($code, 'flowplayer'))
+			tm_flowplayer_script();
+		
+		echo $video;
+	} 
+	elseif(!empty($url)) {
+		$url = trim($url);
+		$video = '';
+		$youtube_player = '';
+		
+		// Youtube List
+		if(preg_match('/http:\/\/www.youtube.com\/embed\/(.*)?list=(.*)/', $url)) {
+			$video = '<iframe width="500" height="315" src="'.$url.'" frameborder="0" allowfullscreen></iframe>';
+		
+		} 
+		// Youtube Player
+		elseif(strpos($url, 'youtube.com') !== false && !empty($youtube_player)) {
+			$args = array(
+				'files' => array($url),
+				'poster' => $poster,
+				'autoplay' => $autoplay
+			);
+			tm_player($youtube_player, $args);
+		} 
+		// WordPress Embeds
+		else {
+			global $wp_embed;
+			$orig_wp_embed = $wp_embed;
+			
+			$wp_embed->post_ID = $post_id;
+			$video = $wp_embed->autoembed($url);
+			
+			if(trim($video) == $url) {
+				$wp_embed->usecache = false;
+				$video = $wp_embed->autoembed($url);
+			}
+			
+			$wp_embed->usecache = $orig_wp_embed->usecache;
+			$wp_embed->post_ID = $orig_wp_embed->post_ID;
+		}
+		
+		$video = tm_extend_video_html($video, $autoplay);
+
+		echo $video;
+	} 
+}
+
+/*
+ * Output Flowplayer script
+ * 
+ */
+function tm_flowplayer_script(){
+	if(!defined('DOING_AJAX') || !DOING_AJAX)
+		return;
+
+	echo '
+	<script type="text/javascript">
+		(function ($) {
+			$(function(){typeof $.fn.flowplayer=="function"&&$("video").parent(".flowplayer").flowplayer()});
+		}(jQuery));
+	</script>
+	';
+	
+	flowplayer_display_scripts();
+}
+/*
+ * Output videojs script
+ * 
+ */
+function tm_add_videojs_swf(){
+		echo '
+		<script type="text/javascript">
+			videojs.options.flash.swf = "'. get_template_directory_uri().( '/js/videojs/video-js.swf') .'";
+		</script>
+		';
+}
+/**
+ * Convert array to attributes string
+ */
+function arr2atts($array = array(), $include_empty_att = false) {
+	if(empty($array))
+		return;
+	
+	$atts = array();
+	foreach($array as $key => $att) {
+		if(!$include_empty_att && empty($att))
+			continue;
+		
+		$atts[] = $key.'="'.$att.'"';
+	}
+	
+	return ' '.implode(' ', $atts);
+}
